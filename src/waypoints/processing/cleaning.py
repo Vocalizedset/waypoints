@@ -1,0 +1,62 @@
+"""Clean the monthly NYC Yellow Taxi trip datasets."""
+
+from pathlib import Path
+
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
+
+ROOT = Path(__file__).resolve().parents[3]
+RAW_DIR = ROOT / "src" / "data" / "raw"
+PROCESSED_DIR = ROOT / "src" / "data" / "processed"
+MONTHS = ("2026-01", "2026-02", "2026-03", "2026-04")
+
+# Profiling found 111 trips above 500 miles (up to 269,097 miles on an 8-minute
+# $12 ride), while 100-500 mile trips have fares consistent with long journeys.
+MAX_DISTANCE_MILES = 500.0
+# 35 trips lasted over 24 hours; shorter long trips can be genuine.
+MAX_DURATION_MINUTES = 24 * 60.0
+
+
+def clean_trips(df: DataFrame) -> DataFrame:
+    # Keep the five null fields tied to payment_type = 0, negative amounts
+    # (39,425 of 39,463 negative fares are exact reversals of positive fares),
+    # uncommon VendorIDs/RatecodeID 99, equal pickup/dropoff zones, and
+    # N/A zones. total_amount is left untouched: component sums disagree on
+    # 38.5% of January rows because of vendor-specific fee treatment.
+    return (
+        df.withColumn(
+            "trip_duration_minutes",
+            (
+                F.unix_timestamp("tpep_dropoff_datetime")
+                - F.unix_timestamp("tpep_pickup_datetime")
+            )
+            / 60.0,
+        )
+        .filter(
+            (F.col("trip_distance") > 0)
+            & (F.col("trip_distance") <= MAX_DISTANCE_MILES)
+            & (F.col("trip_duration_minutes") > 0)
+            & (F.col("trip_duration_minutes") <= MAX_DURATION_MINUTES)
+        )
+    )
+
+
+def run_cleaning_pipeline(spark: SparkSession) -> None:
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    for month in MONTHS:
+        source = RAW_DIR / f"yellow_tripdata_{month}.parquet"
+        trips = spark.read.parquet(str(source))
+        original_count = trips.count()
+
+        cleaned = clean_trips(trips).cache()
+        cleaned_count = cleaned.count()
+        removed = original_count - cleaned_count
+
+        output = PROCESSED_DIR / f"yellow_tripdata_{month}_cleaned.parquet"
+        cleaned.write.mode("overwrite").parquet(str(output))
+        cleaned.unpersist()
+
+        print(
+            f"{month}: original={original_count:,} cleaned={cleaned_count:,} "
+            f"removed={removed:,} retained={cleaned_count / original_count:.2%}"
+        )
