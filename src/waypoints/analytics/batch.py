@@ -1,19 +1,18 @@
 """Batch analytics over all available feature-engineered months.
 
 Reads the cleaned, zone-enriched and feature-engineered monthly datasets,
-combines them, and writes three datasets to ``src/data/output/``:
-
-- analytics_revenue: revenue by month, borough and payment type.
-- analytics_demand: trips and passengers by pickup time and zone.
-- analytics_operations: speed, distance and duration by borough and vendor.
+combines them, and writes revenue, demand and operations datasets to
+``src/data/output/``. Revenue, demand and operations aggregations live in
+their own modules and are shared with the incremental pipeline.
 """
 
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
+from pyspark.sql import SparkSession
 
-from waypoints.processing.cleaning import PROCESSED_DIR, ROOT
+from waypoints.analytics.demand import write_demand_datasets
+from waypoints.analytics.operations import write_operations_datasets
+from waypoints.analytics.revenue import write_revenue_datasets
+from waypoints.processing.cleaning import PROCESSED_DIR
 
-OUTPUT_DIR = ROOT / "src" / "data" / "output"
 PREFIX = "yellow_tripdata_"
 
 
@@ -30,56 +29,6 @@ def discover_months() -> tuple[str, ...]:
     return tuple(sorted(_months_with_suffix("cleaned") & _months_with_suffix("features")))
 
 
-def revenue_analytics(trips: DataFrame) -> DataFrame:
-    """Net revenue, including reversals (negative amounts), by payment type."""
-    return trips.groupBy(
-        F.year("tpep_pickup_datetime").alias("pickup_year"),
-        "pickup_month",
-        "pickup_borough",
-        "payment_type",
-    ).agg(
-        F.count("*").alias("trips"),
-        F.round(F.sum("total_amount"), 2).alias("total_revenue"),
-        F.round(F.sum("fare_amount"), 2).alias("total_fare"),
-        F.round(F.sum("tip_amount"), 2).alias("total_tips"),
-        F.round(F.avg("total_amount"), 2).alias("avg_revenue_per_trip"),
-    )
-
-
-def demand_analytics(trips: DataFrame) -> DataFrame:
-    """Trip demand by pickup date/hour and pickup zone."""
-    return trips.groupBy(
-        F.year("tpep_pickup_datetime").alias("pickup_year"),
-        "pickup_month",
-        "pickup_day",
-        "pickup_day_of_week",
-        "pickup_hour",
-        "is_weekend",
-        "pickup_borough",
-        "pickup_zone",
-    ).agg(
-        F.count("*").alias("trips"),
-        F.round(F.avg("passenger_count"), 2).alias("avg_passengers"),
-    )
-
-
-def operational_analytics(trips: DataFrame) -> DataFrame:
-    """Operational metrics using the engineered speed and cost features."""
-    return trips.groupBy(
-        F.year("tpep_pickup_datetime").alias("pickup_year"),
-        "pickup_month",
-        "pickup_borough",
-        "VendorID",
-    ).agg(
-        F.count("*").alias("trips"),
-        F.round(F.avg("trip_distance"), 2).alias("avg_distance_miles"),
-        F.round(F.avg("trip_duration_minutes"), 2).alias("avg_duration_minutes"),
-        F.round(F.avg("average_speed_mph"), 2).alias("avg_speed_mph"),
-        F.round(F.avg("fare_per_mile"), 2).alias("avg_fare_per_mile"),
-        F.round(F.avg("tip_percentage"), 2).alias("avg_tip_percentage"),
-    )
-
-
 def run_batch_analytics(spark: SparkSession) -> None:
     """Discover every available month, combine them and write the analytics."""
     months = discover_months()
@@ -90,12 +39,6 @@ def run_batch_analytics(spark: SparkSession) -> None:
     trips = spark.read.parquet(
         *(str(PROCESSED_DIR / f"{PREFIX}{month}_features.parquet") for month in months)
     )
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    outputs = (
-        ("analytics_revenue.parquet", revenue_analytics(trips)),
-        ("analytics_demand.parquet", demand_analytics(trips)),
-        ("analytics_operations.parquet", operational_analytics(trips)),
-    )
-    for name, data in outputs:
-        data.write.mode("overwrite").parquet(str(OUTPUT_DIR / name))
+    write_revenue_datasets(trips)
+    write_demand_datasets(trips)
+    write_operations_datasets(trips)

@@ -8,6 +8,7 @@ from pyspark.sql import functions as F
 ROOT = Path(__file__).resolve().parents[3]
 RAW_DIR = ROOT / "src" / "data" / "raw"
 PROCESSED_DIR = ROOT / "src" / "data" / "processed"
+OUTPUT_DIR = ROOT / "src" / "data" / "output"
 MONTHS = tuple(
     sorted(
         path.stem.removeprefix("yellow_tripdata_")
