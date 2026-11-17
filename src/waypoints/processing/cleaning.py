@@ -8,7 +8,12 @@ from pyspark.sql import functions as F
 ROOT = Path(__file__).resolve().parents[3]
 RAW_DIR = ROOT / "src" / "data" / "raw"
 PROCESSED_DIR = ROOT / "src" / "data" / "processed"
-MONTHS = ("2026-01", "2026-02", "2026-03", "2026-04")
+MONTHS = tuple(
+    sorted(
+        path.stem.removeprefix("yellow_tripdata_")
+        for path in RAW_DIR.glob("yellow_tripdata_*.parquet")
+    )
+)
 
 # Profiling found 111 trips above 500 miles (up to 269,097 miles on an 8-minute
 # $12 ride), while 100-500 mile trips have fares consistent with long journeys.
@@ -41,9 +46,18 @@ def clean_trips(df: DataFrame) -> DataFrame:
     )
 
 
-def run_cleaning_pipeline(spark: SparkSession) -> None:
+def run_cleaning_pipeline(
+    spark: SparkSession, months: tuple[str, ...] | None = None
+) -> None:
+    target_months = MONTHS if months is None else months
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    for month in MONTHS:
+    print(
+        "Rules: drop non-positive or >24h durations (also catches null/inverted "
+        "timestamps), non-positive or >500-mile distances; keep correlated nulls, "
+        "negative amounts, uncommon codes, equal zones and N/A zones; "
+        "leave total_amount unchanged."
+    )
+    for month in target_months:
         source = RAW_DIR / f"yellow_tripdata_{month}.parquet"
         trips = spark.read.parquet(str(source))
         original_count = trips.count()

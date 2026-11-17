@@ -7,5 +7,5 @@ __pycache__/
 src/data/raw/*
 src/data/processed/*
 src/data/curated/*
-
+src/data/output/*
 !src/data/README.md

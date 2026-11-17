@@ -8,4 +8,6 @@ Copy `.env.example` to `.env` and set `JAVA_HOME` to your local JDK, then:
 uv run --env-file .env python main.py
 ```
 
-`main.py` is the entry point: it creates the Spark session and runs the processing stages in order. Cleaning writes one Parquet dataset per month to `src/data/processed/`.
+`main.py` is the full-batch entry point: it creates one Spark session and runs each stage in order (cleaning, zone enrichment, features, analytics). Monthly datasets are written to `src/data/processed/`; combined revenue, demand and operations datasets are written to `src/data/output/`.
+
+For file-based incremental runs, use `python incremental.py` instead. It tracks source file size and modification time in `src/data/processed/processing_manifest.json`, reprocesses only new or changed months, and rebuilds the overall analytics from all available months.
